@@ -1,0 +1,16 @@
+{
+  "name": "bulk-email-sender",
+  "version": "1.0.0",
+  "description": "Sends emails to a list of recipients, using a template (with token replacement)",
+  "main": "index.js",
+  "author": "jrsouth",
+  "license": "MIT",
+  "dependencies": {
+    "@inquirer/confirm": "^2.0.12",
+    "@sendgrid/client": "^7.7.0",
+    "@sendgrid/mail": "^7.7.0",
+    "csv-parse": "^5.5.0",
+    "dotenv": "^16.3.1",
+    "html-to-text": "^9.0.5"
+  }
+}
