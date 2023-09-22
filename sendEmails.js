@@ -25,6 +25,17 @@ const init = async () => {
     throw new Error('No SENDGRID_API_KEY env variable found');
   }
 
+  // Test the key
+  sendgridClient.setApiKey(process.env.SENDGRID_API_KEY + 'x');
+  try {
+    const [sendgridTestResponse, sendgridTestBody] = await sendgridClient.request({ method: 'GET', url: '/v3/api_keys' });
+    if (sendgridTestResponse.statusCode !== 200) {
+      throw new Error(`SendGrid API key test failed`);
+    }
+  } catch (e) {
+    throw new Error(`SendGrid API key test failed`);
+  }
+
   // Collect the filenames
   const configFileName = process.argv[2];
   const csvFileName = process.argv[3];
@@ -88,7 +99,7 @@ const init = async () => {
     return;
   }
 
-  // Configure SendGrid
+  // Configure SendGrid mailer
   sendgridMail.setApiKey(process.env.SENDGRID_API_KEY);
 
   // Loop through and send the emails
