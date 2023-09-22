@@ -26,7 +26,7 @@ const init = async () => {
   }
 
   // Test the key
-  sendgridClient.setApiKey(process.env.SENDGRID_API_KEY + 'x');
+  sendgridClient.setApiKey(process.env.SENDGRID_API_KEY);
   try {
     const [sendgridTestResponse, sendgridTestBody] = await sendgridClient.request({ method: 'GET', url: '/v3/api_keys' });
     if (sendgridTestResponse.statusCode !== 200) {
@@ -37,10 +37,22 @@ const init = async () => {
   }
 
   // Collect the filenames
-  const configFileName = process.argv[2];
-  const csvFileName = process.argv[3];
-  const templateFileName = process.argv[4];
-  if (!configFileName || !csvFileName || !templateFileName) {
+  // ...Either supplied as a single name parameter, which will then look for the defaults:
+  //  - config/name.env
+  //  - data/name.csv
+  //  - templates/name.html
+  //
+  // ...OR all three files individually specified in order
+  let configFileName = process.argv[2];
+  let csvFileName = process.argv[3];
+  let templateFileName = process.argv[4];
+  if (configFileName && !csvFileName && !templateFileName) {
+    const filenameBase = configFileName;
+    configFileName = `config/${filenameBase}.env`;
+    csvFileName = `data/${filenameBase}.csv`;
+    templateFileName = `templates/${filenameBase}.html`;
+  }
+  else if (!configFileName || !csvFileName || !templateFileName) {
     throw new Error('Must provide config file, CSV file, and template file as first three arguments');
   }
 
@@ -58,6 +70,10 @@ const init = async () => {
   // Check configuration
   const configFileContents = fs.readFileSync(configFileName);
   const config = dotenv.parse(configFileContents);
+
+  if (!config.SUBJECT_LINE || !config.FROM_NAME || !config.FROM_ADDRESS) {
+    throw new Error('Config file must contain: SUBJECT_LINE, FROM_NAME, FROM_ADDRESS');
+  }
 
   // Check CSV
   const { columnNames, recordCount } = await getCsvInfo(csvFileName);
@@ -126,7 +142,7 @@ const init = async () => {
 };
 
 const replaceTokens = (input, keys, values) => {
-  return input.replace(/@[a-zA-Z0-9_]*@/g, (match) => values[keys.indexOf(match.slice(1, -1))]);
+  return input.replace(/@[a-zA-Z0-9_]*@/g, (match) => values[keys.indexOf(match.slice(1, -1))] || match);
 };
 
 // Send one email

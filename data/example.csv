@@ -1,4 +1,4 @@
-"Name","Salutation","Email"
-"John","Dear Mr Smith","john.smith@mailinator.com"
-"Jane","Dear Mrs Brown","jane.brown@mailinator.com"
-"Joe","Dear Captain Jones","badaddress.mailinator.com"
+"Email","Name","Salutation"
+"john.smith@mailinator.com","John","Dear Mr Smith"
+"jane.brown@mailinator.com","Jane","Dear Mrs Brown"
+"badaddress.mailinator.com","Joe","Dear Captain Jones"
