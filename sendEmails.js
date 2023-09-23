@@ -1,5 +1,4 @@
 const fs = require('fs');
-const readline = require('readline');
 
 const { parse } = require('csv-parse/sync');
 const sendgridClient = require('@sendgrid/client');
@@ -15,6 +14,20 @@ const defaults = {
 
 // Collect env vars
 dotenv.config();
+
+const multiSend = false;
+
+// Set up logger
+let logFileStream;
+
+const log = (msg, channel = 'log') => {
+  console[channel](msg);
+  if (typeof msg === 'string') {
+    logFileStream.write(msg + '\n');
+  } else {
+    logFileStream.write(JSON.stringify(msg, null, 2) + '\n');
+  }
+};
 
 const init = async () => {
 
@@ -64,6 +77,9 @@ const init = async () => {
     throw new Error('Must provide config file, CSV file, and template file as first three arguments');
   }
 
+  // Setup the log file
+  logFileStream =  fs.createWriteStream(`logs/${process.argv[2]}-${(new Date()).toISOString()}.txt`, {flags: 'a'});
+
   // Check that our files look okay
   if (!fs.existsSync(configFileName)) {
     throw new Error('config file could not be found');
@@ -83,8 +99,8 @@ const init = async () => {
     throw new Error('Config file must contain: SUBJECT_LINE, FROM_NAME, FROM_ADDRESS');
   }
 
-  const throttle = config.THROTTLE || defaults.throttle;
-  const concurrency = config.CONCURRENCY || defaults.concurrency;
+  const throttle = parseInt(config.THROTTLE, 10) || defaults.throttle;
+  const concurrency = parseInt(config.CONCURRENCY, 10) || defaults.concurrency;
 
   // Check CSV
   const { columnNames, recordCount } = await getCsvInfo(csvFileName);
@@ -112,64 +128,118 @@ const init = async () => {
     throw new Error(`Some tokens used in the template file or subject line are not available in the CSV: ${unavailableTokens.join(', ')}`);
   }
 
+  // Log that we're ready to proceed
+  log('Initialisation complete');
+
   // Show what we're working with
   // @TODO: Make more nicer
-  console.log(config);
-  console.log({ columnNames });
-  console.log({ recordCount });
-  console.log({ usedTokens });
-  console.log({ throttle });
-  console.log({ concurrency });
+  log(config);
+  log({ columnNames });
+  log({ recordCount });
+  log({ usedTokens });
+  log({ throttle });
+  log({ concurrency });
 
   if (await confirm({ message: `Send ${recordCount} email(s)?`, default: false })) {
-    console.log('Running...');
+    log('Running...');
   } else {
-    console.log('Exiting without action');
+    log('Exiting without action');
     return;
   }
 
   // Loop through and send the emails
   const csvFileContents = parse(fs.readFileSync(csvFileName).toString());
-  for (let i = 1; i <= recordCount; i += concurrency) { // i = 1 to skip header row
 
-    console.log(`Starting batch`);
 
-    // Throttle between batches
-    if (throttle) {
-      console.log(`Throttling for ${throttle}ms`);
-      await new Promise((resolve) =>setTimeout(resolve, throttle));
-    }
+  if (!multiSend) {
+    // ----- START Original concurrent-single-send code -----
+    for (let i = 1; i <= recordCount; i += concurrency) { // i = 1 to skip header row
 
-    const addressArray = [];
-    const responseArray = [];
-
-    for (let j = 0; j < concurrency; j++) {
-      const currentRecord = csvFileContents[i + j];
-      if (currentRecord) {
-        addressArray.push(currentRecord[emailColumnIndex]);
-        responseArray.push(sendOneEmail({
-          from: config.FROM_ADDRESS,
-          fromName: config.FROM_NAME,
-          to: currentRecord[emailColumnIndex],
-          subject: replaceTokens(config.SUBJECT_LINE, columnNames, currentRecord),
-          htmlMessage: replaceTokens(templateFileContents, columnNames, currentRecord),
-        }));
-      } else {
-
+      if (concurrency > 1) {
+        log(`-- Batch ${(i - 1) / concurrency + 1} of ${Math.ceil(recordCount / concurrency)} [${Math.min((recordCount - i) + 1, concurrency)} recipient(s)]`);
       }
-    }
 
-    // Wait until this batch is done
-    await Promise.all(responseArray);
-
-    responseArray.forEach((value, index) => {
-      if (value) {
-        console.log(`✅ (${i + index}/${recordCount}) Message successfully sent to ${addressArray[index]} (ID: ${value})`);
-      } else {
-        console.error(`⛔ (${i + index}/${recordCount}) Message failed to ${addressArray[index]}`);
+      // Throttle between batches
+      if (throttle) {
+        log(`-- Throttling active, delaying for ${throttle}ms`);
+        await new Promise((resolve) => setTimeout(resolve, throttle));
+        log(`-- Delay complete, beginning send`);
       }
-    });
+
+      const addressArray = [];
+      const responseArray = [];
+
+      for (let j = 0; j < concurrency; j++) {
+        const currentRecord = csvFileContents[i + j];
+        if (currentRecord) {
+          addressArray.push(currentRecord[emailColumnIndex]);
+          responseArray.push(sendOneEmail({
+            from: config.FROM_ADDRESS,
+            fromName: config.FROM_NAME,
+            to: currentRecord[emailColumnIndex],
+            subject: replaceTokens(config.SUBJECT_LINE, columnNames, currentRecord),
+            htmlMessage: replaceTokens(templateFileContents, columnNames, currentRecord),
+          }));
+        }
+      }
+
+      // Wait until this whole batch is done
+      const resolvedResponses = await Promise.all(responseArray);
+
+      // Report
+      resolvedResponses.forEach((value, index) => {
+        if (value) {
+          log(`✅ (${i + index}/${recordCount}) Message successfully sent to ${addressArray[index]} (ID: ${value})`);
+        } else {
+          log(`⛔ (${i + index}/${recordCount}) Message failed to ${addressArray[index]}`, 'error');
+        }
+      });
+    }
+    // ----- END Original concurrent single-send code -----
   }
+
+  if (multiSend) {
+    // ----- START Test of multi-send code -----
+    for (let i = 1; i <= recordCount; i += concurrency) { // i = 1 to skip header row
+
+      if (concurrency > 1) {
+        log(`-- Batch ${(i - 1) / concurrency + 1} of ${Math.ceil(recordCount / concurrency)} [${Math.min((recordCount - i) + 1, concurrency)} recipient(s)]`);
+      }
+
+      // Throttle between batches
+      if (throttle) {
+        log(`-- Throttling active, delaying for ${throttle}ms`);
+        await new Promise((resolve) => setTimeout(resolve, throttle));
+        log(`-- Delay complete, beginning send`);
+      }
+
+      const messageArray = [];
+
+      for (let j = 0; j < concurrency; j++) {
+        const currentRecord = csvFileContents[i + j];
+        if (currentRecord) {
+
+          const htmlMessage = replaceTokens(templateFileContents, columnNames, currentRecord);
+
+          messageArray.push({
+            to: [currentRecord[emailColumnIndex]],
+            from: {
+              email: config.FROM_ADDRESS,
+              name: config.FROM_NAME,
+            },
+            subject: replaceTokens(config.SUBJECT_LINE, columnNames, currentRecord),
+            html: htmlMessage,
+            text: htmlToText(htmlMessage),
+          });
+        }
+      }
+
+      const response = await sendMultipleEmails(messageArray);
+      log(response);
+      // ----- END Test of multi-send code -----
+    }
+  }
+
 };
 
 const replaceTokens = (input, keys, values) => {
@@ -208,6 +278,37 @@ const sendOneEmail = async (config) => {
 
 };
 
+// Send a batch of emails
+// WIP, don't seem to get a ton of detail on failures
+const sendMultipleEmails = async (messagesArray) => {
+
+  // log(messagesArray);
+  // await new Promise((r) => setTimeout(r, 2000));
+  // return 'bbbb';
+
+  try {
+    const [response, reject] = await sendgridMail.send(messagesArray);
+    log(response);
+    log(response[0]);
+    log(response[0].statusCode);
+    log(reject);
+    log('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+
+    if (reject || response[0].statusCode !== 202) {
+      log('error');
+      return false;
+    }
+    log('good');
+    log(response);
+    return true;
+  } catch (e) {
+    log('catch');
+    log(e.response.body);
+    return false;
+  }
+
+};
+
 // Count lines in a file and get column names from first line
 // From https://stackoverflow.com/a/41439945
 // and https://stackoverflow.com/a/28749643
@@ -236,4 +337,4 @@ function getCsvInfo(filePath) {
 };
 
 // ----- Run it all -----
-init().then(() => { console.log('DONE'); });
+init().then(() => { log('DONE'); logFileStream.end(); });
