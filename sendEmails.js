@@ -8,6 +8,11 @@ const { htmlToText } = require('html-to-text');
 const { default: confirm } = require('@inquirer/confirm');
 const dotenv = require('dotenv');
 
+const defaults = {
+  throttle: 0, // ms to pause between batches
+  concurrency: 1, // messages to send per batch
+};
+
 // Collect env vars
 dotenv.config();
 
@@ -35,6 +40,9 @@ const init = async () => {
   } catch (e) {
     throw new Error(`SendGrid API key test failed`);
   }
+
+  // Configure the SendGrid mailer with the tested and working key
+  sendgridMail.setApiKey(process.env.SENDGRID_API_KEY);
 
   // Collect the filenames
   // ...Either supplied as a single name parameter, which will then look for the defaults:
@@ -75,6 +83,9 @@ const init = async () => {
     throw new Error('Config file must contain: SUBJECT_LINE, FROM_NAME, FROM_ADDRESS');
   }
 
+  const throttle = config.THROTTLE || defaults.throttle;
+  const concurrency = config.CONCURRENCY || defaults.concurrency;
+
   // Check CSV
   const { columnNames, recordCount } = await getCsvInfo(csvFileName);
   const emailColumnIndex = columnNames.indexOf('Email');
@@ -107,37 +118,57 @@ const init = async () => {
   console.log({ columnNames });
   console.log({ recordCount });
   console.log({ usedTokens });
+  console.log({ throttle });
+  console.log({ concurrency });
 
   if (await confirm({ message: `Send ${recordCount} email(s)?`, default: false })) {
-    console.log('Running.');
+    console.log('Running...');
   } else {
     console.log('Exiting without action');
     return;
   }
 
-  // Configure SendGrid mailer
-  sendgridMail.setApiKey(process.env.SENDGRID_API_KEY);
-
   // Loop through and send the emails
   const csvFileContents = parse(fs.readFileSync(csvFileName).toString());
-  for (let i = 1; i <= recordCount; i++) {
+  for (let i = 1; i <= recordCount; i += concurrency) { // i = 1 to skip header row
 
-    // Throttle
-    // await new Promise((resolve) =>setTimeout(resolve, 500));
+    console.log(`Starting batch`);
 
-    const currentRecord = csvFileContents[i];
-    const emailId = await sendOneEmail({
-      from: config.FROM_ADDRESS,
-      fromName: config.FROM_NAME,
-      to: currentRecord[emailColumnIndex],
-      subject: replaceTokens(config.SUBJECT_LINE, columnNames, currentRecord),
-      htmlMessage: replaceTokens(templateFileContents, columnNames, currentRecord),
-    });
-    if (emailId) {
-      console.log(`✅ (${i}/${recordCount}) Message successfully sent to ${currentRecord[emailColumnIndex]} (ID: ${emailId})`);
-    } else {
-      console.error(`⛔ (${i}/${recordCount}) Message failed to ${currentRecord[emailColumnIndex]}`);
+    // Throttle between batches
+    if (throttle) {
+      console.log(`Throttling for ${throttle}ms`);
+      await new Promise((resolve) =>setTimeout(resolve, throttle));
     }
+
+    const addressArray = [];
+    const responseArray = [];
+
+    for (let j = 0; j < concurrency; j++) {
+      const currentRecord = csvFileContents[i + j];
+      if (currentRecord) {
+        addressArray.push(currentRecord[emailColumnIndex]);
+        responseArray.push(sendOneEmail({
+          from: config.FROM_ADDRESS,
+          fromName: config.FROM_NAME,
+          to: currentRecord[emailColumnIndex],
+          subject: replaceTokens(config.SUBJECT_LINE, columnNames, currentRecord),
+          htmlMessage: replaceTokens(templateFileContents, columnNames, currentRecord),
+        }));
+      } else {
+
+      }
+    }
+
+    // Wait until this batch is done
+    await Promise.all(responseArray);
+
+    responseArray.forEach((value, index) => {
+      if (value) {
+        console.log(`✅ (${i + index}/${recordCount}) Message successfully sent to ${addressArray[index]} (ID: ${value})`);
+      } else {
+        console.error(`⛔ (${i + index}/${recordCount}) Message failed to ${addressArray[index]}`);
+      }
+    });
   }
 };
 
