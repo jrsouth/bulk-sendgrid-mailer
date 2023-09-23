@@ -102,6 +102,9 @@ const init = async () => {
   const throttle = parseInt(config.THROTTLE, 10) || defaults.throttle;
   const concurrency = parseInt(config.CONCURRENCY, 10) || defaults.concurrency;
 
+  const send_at = parseInt(config.SEND_AT, 10) || false;
+  const batch_id = config.BATCH_ID || false;
+
   // Check CSV
   const { columnNames, recordCount } = await getCsvInfo(csvFileName);
   const emailColumnIndex = columnNames.indexOf('Email');
@@ -139,6 +142,8 @@ const init = async () => {
   log({ usedTokens });
   log({ throttle });
   log({ concurrency });
+  log({ send_at, humanReadable: (new Date(send_at * 1000)).toISOString() });
+  log({ batch_id });
 
   if (await confirm({ message: `Send ${recordCount} email(s)?`, default: false })) {
     log('Running...');
@@ -179,6 +184,8 @@ const init = async () => {
             to: currentRecord[emailColumnIndex],
             subject: replaceTokens(config.SUBJECT_LINE, columnNames, currentRecord),
             htmlMessage: replaceTokens(templateFileContents, columnNames, currentRecord),
+            send_at,
+            batch_id,
           }));
         }
       }
@@ -189,9 +196,9 @@ const init = async () => {
       // Report
       resolvedResponses.forEach((value, index) => {
         if (value) {
-          log(`✅ (${i + index}/${recordCount}) Message successfully sent to ${addressArray[index]} (ID: ${value})`);
+          log(`✅ (${i + index}/${recordCount}) Message successfully submitted for ${addressArray[index]} (ID: ${value})`);
         } else {
-          log(`⛔ (${i + index}/${recordCount}) Message failed to ${addressArray[index]}`, 'error');
+          log(`⛔ (${i + index}/${recordCount}) Message failed to submit for ${addressArray[index]}`, 'error');
         }
       });
     }
@@ -249,7 +256,7 @@ const replaceTokens = (input, keys, values) => {
 // Send one email
 const sendOneEmail = async (config) => {
 
-  const { from, fromName, to, subject, htmlMessage, plaintextMessage } = config;
+  const { from, fromName, to, subject, htmlMessage, plaintextMessage, send_at, batch_id } = config;
 
   const recipients = Array.isArray(to) ? to : [to];
 
@@ -263,6 +270,14 @@ const sendOneEmail = async (config) => {
     text: plaintextMessage || htmlToText(htmlMessage),
     html: htmlMessage,
   };
+
+  if (send_at) {
+    messageObject.send_at = send_at;
+  }
+
+  if (batch_id) {
+    messageObject.batch_id = batch_id;
+  }
 
   try {
     const [response, reject] = await sendgridMail.send(messageObject);
@@ -292,7 +307,6 @@ const sendMultipleEmails = async (messagesArray) => {
     log(response[0]);
     log(response[0].statusCode);
     log(reject);
-    log('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
 
     if (reject || response[0].statusCode !== 202) {
       log('error');
@@ -337,4 +351,4 @@ function getCsvInfo(filePath) {
 };
 
 // ----- Run it all -----
-init().then(() => { log('DONE'); logFileStream.end(); });
+init().then(() => { log(`DONE at ${(new Date()).toISOString()}`); logFileStream.end(); });
